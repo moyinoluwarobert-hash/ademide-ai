@@ -7,20 +7,51 @@ import ccxt
 DATA_FILE = Path(__file__).parent / "data" / "paper_state.json"
 
 def fetch_market_data(exchange, symbol, timeframe):
-    client = ccxt.bybit({"enableRateLimit": True}) if exchange == "Bybit" else ccxt.binance({"enableRateLimit": True})
-    rows = client.fetch_ohlcv(symbol, timeframe=timeframe, limit=200)
-    if not rows:
-        raise RuntimeError("Exchange returned no candle data.")
-    df = pd.DataFrame(rows, columns=["timestamp_ms","open","high","low","close","volume"])
-    df["timestamp"] = pd.to_datetime(df["timestamp_ms"], unit="ms", utc=True)
-    df["ema_fast"] = df["close"].ewm(span=9, adjust=False).mean()
-    df["ema_slow"] = df["close"].ewm(span=21, adjust=False).mean()
-    delta = df["close"].diff()
-    gain = delta.clip(lower=0).ewm(alpha=1/14, adjust=False).mean()
-    loss = (-delta.clip(upper=0)).ewm(alpha=1/14, adjust=False).mean()
-    rs = gain / loss.replace(0, 1e-12)
-    df["rsi"] = 100 - 100/(1+rs)
-    return df
+    """Fetch OHLCV candles, trying several public exchanges automatically.
+
+    The `exchange` argument is retained for compatibility with older app.py
+    versions, but the app no longer depends on a single exchange provider.
+    """
+    providers = [
+        ("Kraken", ccxt.kraken),
+        ("Coinbase", ccxt.coinbase),
+        ("Bitstamp", ccxt.bitstamp),
+        ("OKX", ccxt.okx),
+    ]
+    errors = []
+    base, quote = symbol.split("/")
+    candidate_symbols = [symbol]
+    if quote == "USDT":
+        candidate_symbols.extend([f"{base}/USD", f"{base}/USDC"])
+
+    for provider_name, provider_class in providers:
+        try:
+            client = provider_class({"enableRateLimit": True, "timeout": 15000})
+            markets = client.load_markets()
+            selected_symbol = next((s for s in candidate_symbols if s in markets and markets[s].get("active", True)), None)
+            if not selected_symbol:
+                errors.append(f"{provider_name}: pair unavailable")
+                continue
+            rows = client.fetch_ohlcv(selected_symbol, timeframe=timeframe, limit=200)
+            if not rows:
+                errors.append(f"{provider_name}: no candle data")
+                continue
+            df = pd.DataFrame(rows, columns=["timestamp_ms", "open", "high", "low", "close", "volume"])
+            df["timestamp"] = pd.to_datetime(df["timestamp_ms"], unit="ms", utc=True)
+            df["ema_fast"] = df["close"].ewm(span=9, adjust=False).mean()
+            df["ema_slow"] = df["close"].ewm(span=21, adjust=False).mean()
+            delta = df["close"].diff()
+            gain = delta.clip(lower=0).ewm(alpha=1/14, adjust=False).mean()
+            loss = (-delta.clip(upper=0)).ewm(alpha=1/14, adjust=False).mean()
+            rs = gain / loss.replace(0, 1e-12)
+            df["rsi"] = 100 - 100/(1+rs)
+            df.attrs["provider"] = provider_name
+            df.attrs["market_symbol"] = selected_symbol
+            return df
+        except Exception as exc:
+            errors.append(f"{provider_name}: {type(exc).__name__}: {str(exc)[:180]}")
+
+    raise RuntimeError("All public market-data providers failed. " + " | ".join(errors))
 
 def build_signal(df):
     if len(df) < 30:

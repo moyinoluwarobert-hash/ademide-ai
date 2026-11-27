@@ -28,7 +28,7 @@ def login_screen():
         st.write("")
         if setup_needed():
             st.subheader("Create your private account")
-            st.caption("Your login is stored locally in this app's database. Use a unique password.")
+            st.caption("Create a private login. Use a unique password and keep it safe.")
             with st.form("create_account"):
                 username = st.text_input("Username")
                 password = st.text_input("Password", type="password")
@@ -74,12 +74,12 @@ with st.sidebar:
         logout()
         st.rerun()
     st.divider()
-    exchange = st.selectbox("Market data source", ["Binance", "Bybit"])
+    st.caption("Market data provider: automatic fallback across public exchanges")
     symbol = st.selectbox("Spot pair", ["BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT", "XRP/USDT"])
     timeframe = st.selectbox("Analysis timeframe", ["5m", "15m", "30m", "1h"], index=1)
     st.divider()
     st.markdown("### Paper account")
-    initial_balance = st.number_input("Virtual balance (USDT)", 10.0, 100000.0, 1000.0, 50.0)
+    initial_balance = st.number_input("Virtual balance (USDT)", 10.0, 100000.0, 10.0, 1.0)
     risk_pct = st.slider("Risk budget per trade", 0.25, 2.0, 1.0, 0.25)
     stop_pct = st.slider("Stop loss", 0.5, 5.0, 1.5, 0.25)
     target_pct = st.slider("Take profit", 0.5, 10.0, 3.0, 0.25)
@@ -93,12 +93,14 @@ state = load_state(initial_balance)
 trader = PaperTrader(state, fee_pct/100, risk_pct/100, stop_pct/100, target_pct/100)
 
 try:
-    candles = fetch_market_data(exchange, symbol, timeframe)
+    candles = fetch_market_data("auto", symbol, timeframe)
     current_price = float(candles["close"].iloc[-1])
     signal = build_signal(candles)
     trader.manage(current_price, symbol, signal)
     save_state(state)
-    data_note = f"Public {exchange} market data loaded. Last candle: {candles['timestamp'].iloc[-1]}"
+    provider = candles.attrs.get("provider", "public provider")
+    market_symbol = candles.attrs.get("market_symbol", symbol)
+    data_note = f"Market data loaded from {provider} ({market_symbol}). Last candle: {candles['timestamp'].iloc[-1]}"
 except Exception as exc:
     candles, current_price, signal = None, None, "UNAVAILABLE"
     data_note = f"Market data could not be loaded: {exc}"
@@ -116,7 +118,7 @@ c4.metric("Closed trade win rate", f"{wins/len(closed)*100:.1f}%" if closed else
 st.caption(data_note)
 
 if candles is not None:
-    st.subheader(f"{symbol} · {exchange} · {timeframe}")
+    st.subheader(f"{symbol} · {timeframe}")
     st.line_chart(candles.tail(120).set_index("timestamp")[["close", "ema_fast", "ema_slow"]])
     st.caption("Strategy baseline: EMA 9/21 crossover plus RSI confirmation. It is a transparent rules-based strategy, not a trained predictive model.")
     if position:
@@ -146,7 +148,7 @@ st.subheader("Operating status")
 st.markdown("""
 - **Automatic decisions:** the rules engine can open/close simulated positions when this app processes a market update.
 - **Not continuous yet:** this free prototype processes updates when the app is active/refreshed; it is not a guaranteed 24/7 background trader.
-- **No real orders:** Binance/Bybit are used only for public price candles. Never enter API secrets into this prototype.
+- **No real orders:** public exchange candle data is used only for paper trading. Never enter API secrets into this prototype.
 - **No profit promise:** results need proper historical backtesting, out-of-sample testing, realistic fees/slippage and extended demo testing.
 """)
-st.info("Free-first plan: run locally for development, then consider a free web host for access from your phone. Free hosting commonly sleeps or has limits, so uninterrupted autonomous trading cannot be promised at zero cost.")
+st.info("This is a paper-trading prototype. Free hosting may sleep, and its local files may not persist reliably between restarts. Do not use it for real-money trading.")
