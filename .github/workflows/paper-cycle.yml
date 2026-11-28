@@ -30,4 +30,4 @@ jobs:
         env:
           DATABASE_URL: ${{ secrets.ADEMIDE_DATABASE_URL }}
           RUN_ONCE: "1"
-        run: python paper_worker.py
+        run: timeout 50s python paper_worker.py
