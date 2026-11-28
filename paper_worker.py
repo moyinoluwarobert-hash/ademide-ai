@@ -83,7 +83,7 @@ def log_event(conn, level, message, details=None):
     )
 
 
-def run_once(exchange):
+def run_once(exchange, allow_entries=True):
     one = market_data(exchange, "1m", 90)
     five = market_data(exchange, "5m", 90)
     fifteen = market_data(exchange, "15m", 90)
@@ -102,6 +102,13 @@ def run_once(exchange):
 
         cash = float(account["cash"])
         position = account["position"]
+        previous_check = account["last_check"]
+        if position and previous_check and (now - previous_check) > timedelta(minutes=3):
+            conn.execute("UPDATE paper_account SET paused=TRUE, pause_reason='MISSED RISK MONITORING WINDOW' WHERE id=1")
+            log_event(conn, "WARNING", "Safety pause: missed risk monitoring window",
+                      {"minutes_since_check": round((now - previous_check).total_seconds()/60, 2)})
+            conn.commit()
+            return
         equity = cash + (float(position["qty"]) * price if position else 0.0)
         peak = max(float(account["peak_equity"]), equity)
         day_start = float(account["day_start_equity"] or account["initial_balance"])
@@ -144,7 +151,7 @@ def run_once(exchange):
                 log_event(conn, "INFO", f"Paper position closed: {exit_reason}",
                           {"exit": exit_price, "pnl": round(pnl, 4)})
 
-        if position is None and signal_name == "BUY":
+        if allow_entries and position is None and signal_name == "BUY":
             midnight = datetime.combine(now.date(), datetime.min.time(), tzinfo=timezone.utc)
             recent = conn.execute("""
                 SELECT count(*) AS n, max(opened_at) AS last_open
@@ -172,6 +179,8 @@ def run_once(exchange):
                     log_event(conn, "INFO", "Paper BUY opened",
                               {"price": price, "qty": qty, "risk_budget": risk_cash})
 
+        current_equity = cash + (float(position["qty"]) * price if position else 0.0)
+        peak = max(peak, current_equity)
         conn.execute("""
             UPDATE paper_account SET peak_equity=%s, last_price=%s, last_check=%s,
             last_signal=%s, updated_at=now() WHERE id=1
@@ -194,10 +203,15 @@ def main():
         ensure_account(conn)
         log_event(conn, "INFO", "Paper worker started")
         conn.commit()
+    if os.getenv("RUN_ONCE", "").lower() in ("1", "true", "yes"):
+        run_once(exchange, allow_entries=False)
+        LOG.info("One-shot cycle completed; new entries disabled because scheduled runs cannot monitor 1-minute risk.")
+        return
+
     while running:
         started = time.monotonic()
         try:
-            run_once(exchange)
+            run_once(exchange, allow_entries=True)
         except Exception:
             LOG.exception("Paper cycle failed; no order was placed")
             try:
