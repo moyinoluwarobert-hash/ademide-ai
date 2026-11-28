@@ -1,0 +1,33 @@
+name: ADEMIDE paper cycle
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "*/5 * * * *"
+
+concurrency:
+  group: ademide-paper-cycle
+  cancel-in-progress: false
+
+jobs:
+  paper-cycle:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    permissions:
+      contents: read
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+          cache-dependency-path: requirements-worker.txt
+      - name: Install dependencies
+        run: pip install -r requirements-worker.txt
+      - name: Run one paper-trading cycle
+        env:
+          DATABASE_URL: ${{ secrets.ADEMIDE_DATABASE_URL }}
+          RUN_ONCE: "1"
+        run: timeout 50s python paper_worker.py
